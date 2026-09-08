@@ -1,11 +1,13 @@
 """APScheduler job definitions."""
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from sqlalchemy import delete, select
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +60,6 @@ class SchedulerService:
         from bot.extractors import VkExtractor, IgExtractor, TtExtractor
         from bot.extractors.base import AuthExpiredError, RateLimitError, NetworkError
         from bot.transport.delivery import MediaDelivery
-        from sqlalchemy import select
-        import hashlib
 
         logger.info("poll_started: platform=%s content_type=%s target_type=%s job_name=%s", platform, content_type, target_type, job_name)
 
@@ -88,7 +88,7 @@ class SchedulerService:
                 logger.warning("poll_no_credentials: platform=%s", platform)
                 return
 
-            extractor = self._build_extractor(platform, credentials)
+            extractor = await self._build_extractor(platform, credentials)
             delivery = MediaDelivery(bot=self._bot, chat_id=self._chat_id, temp_dir=self._settings.temp_media_dir, max_size_mb=self._settings.max_media_size_mb)
 
             for target in targets:
@@ -179,25 +179,44 @@ class SchedulerService:
 
         logger.info("poll_finished: platform=%s content_type=%s target_type=%s job_name=%s", platform, content_type, target_type, job_name)
 
-    def _build_extractor(self, platform, credentials):
+    async def _build_extractor(self, platform, credentials):
+        """Build and initialize the appropriate extractor for the platform."""
         from bot.extractors import VkExtractor, IgExtractor, TtExtractor
         from bot.crypto import CredentialEncryption
 
         cred_dict = CredentialEncryption.decrypt_string(credentials.credential_data, self._settings.encryption_key)
 
         if platform == "vk":
-            return VkExtractor(credentials=cred_dict)
+            from vkbottle import API
+            extractor = VkExtractor(credentials=cred_dict)
+            extractor._api = API(token=cred_dict.get("user_token", ""))
+            return extractor
         elif platform == "instagram":
-            return IgExtractor(credentials=cred_dict)
+            from instagrapi import Client
+            extractor = IgExtractor(credentials=cred_dict)
+            client = Client()
+            username = cred_dict.get("username", "")
+            password = cred_dict.get("password", "")
+            if username and password:
+                client.login(username, password)
+            elif cred_dict.get("session_file"):
+                client.load_settings(cred_dict["session_file"])
+            extractor._client = client
+            return extractor
         elif platform == "tiktok":
-            return TtExtractor(credentials=cred_dict)
+            from TikTokApi import TikTokApi
+            extractor = TtExtractor(credentials=cred_dict)
+            api = TikTokApi()
+            await api.create_sessions(ms_tokens=[cred_dict.get("ms_token", "")] if cred_dict.get("ms_token") else None,
+                                       cookies=cred_dict.get("cookies"))
+            extractor._api = api
+            return extractor
         else:
             raise ValueError(f"Unknown platform: {platform}")
 
     async def _cleanup_old_hashes(self) -> None:
         from datetime import timedelta
         from bot.db.models import ContentHash
-        from sqlalchemy import delete
 
         cutoff = datetime.utcnow() - timedelta(days=30)
 

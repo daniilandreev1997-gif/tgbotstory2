@@ -2,6 +2,7 @@
 
 from aiogram import Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 menu_router = Router(name="menu")
@@ -28,8 +29,9 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 @menu_router.message(Command("start"))
-async def cmd_start(message: Message) -> None:
-    """Handle /start command - show main menu."""
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    """Handle /start command - show main menu. Clears all active FSM states."""
+    await state.clear()
     await message.answer(
         "🤖 **tgbotstory2** — мультиплатформенный мониторинг\n\n"
         "Отслеживаю контент в VK, Instagram* и TikTok.\n"
@@ -39,8 +41,9 @@ async def cmd_start(message: Message) -> None:
 
 
 @menu_router.callback_query(lambda c: c.data == "menu:back")
-async def back_to_menu(callback_query) -> None:
-    """Return to main menu."""
+async def back_to_menu(callback_query, state: FSMContext) -> None:
+    """Return to main menu. Clears all active FSM states."""
+    await state.clear()
     await callback_query.message.edit_text(
         "🤖 **tgbotstory2** — мультиплатформенный мониторинг\n\n"
         "Выберите действие:",
