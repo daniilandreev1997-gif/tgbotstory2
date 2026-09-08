@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     # --- Telegram ---
-    bot_token: str
+    bot_token: str = ""
     admin_ids: str = ""
     chat_id: int = 0
 
@@ -35,14 +35,14 @@ class Settings(BaseSettings):
     tt_ms_token: str | None = None
 
     # --- Database ---
-    db_path: str = "sqlite+aiosqlite:///data/bot.db"
+    db_path: str = "sqlite+aiosqlite:////app/data/bot.db"
 
     # --- Polling ---
     poll_timeout: int = 30
     max_concurrent_polls: int = 3
 
     # --- Media ---
-    temp_media_dir: str = "/tmp/tgbotstory2_media"
+    temp_media_dir: str = "/app/data/tmp"
     max_media_size_mb: int = 50
 
     # --- Encryption ---
@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # --- Logging ---
     log_level: str = "INFO"
-    log_file: str = "logs/bot.log"
+    log_file: str = ""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

@@ -10,8 +10,9 @@
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                  systemd unit: tgbotstory2         │
-│  Type=simple | Restart=always | WatchdogSec=60s    │
+│              Bothost Docker-контейнер              │
+│  /app ← Git bind mount (авто-деплой)              │
+│  /app/data ← Персистентный volume                  │
 │                                                    │
 │  ┌─────────────────────┐  ┌──────────────────────┐│
 │  │  aiogram Bot + DP   │  │  APScheduler         ││
@@ -27,13 +28,13 @@
 │            │                         │             │
 │            ▼                         ▼             │
 │  ┌──────────────────────────────────────────────┐  │
-│  │          SQLite (aiosqlite + WAL mode)        │  │
+│  │      SQLite /app/data/bot.db (WAL mode)       │  │
 │  │  target | content_hash | auth_credential      │  │
 │  │         | poll_log                            │  │
 │  └──────────────────────────────────────────────┘  │
 │                                                    │
-│  /tmp/tgbotstory2_media/  ← временные файлы       │
-│  logs/bot.log              ← ротация 10 MB × 3    │
+│  /app/data/tmp/  ← временные медиафайлы            │
+│  stdout          ← структурированные логи          │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -41,21 +42,39 @@
 
 | Компонент | Минимальная версия |
 |-----------|-------------------|
-| Python | 3.10+ |
+| Python | 3.11+ |
 | Bothost.ru тариф | 2 vCPU, 1 GB RAM, 5 GB Disk |
 | Доступ к Telegram API | Прямой (без прокси) |
-| systemd | user-юниты (linger) |
 
-## 🚀 Быстрый старт
+## 🚀 Быстрый старт (Bothost)
 
-```bash
-cd /home/user
-git clone https://github.com/daniilandreev1997-gif/tgbotstory2.git
-cd tgbotstory2
-bash scripts/setup.sh
-nano .env  # fill BOT_TOKEN, ENCRYPTION_KEY, etc.
-systemctl --user restart tgbotstory2
-```
+1. **Создайте проект** в [Bothost.ru](https://bothost.ru) → «Новый бот».
+2. **Привяжите Git-репозиторий** — Bothost автоматически клонирует репозиторий в `/app` и пересобирает контейнер при push.
+3. **Настройте переменные окружения** в панели Bothost (см. таблицу ниже).
+4. **Нажмите «Запустить»** — платформа соберёт образ из [`Dockerfile`](Dockerfile), установит зависимости и Playwright-браузеры, запустит бота.
+
+Bothost автоматически:
+- Устанавливает `BOT_TOKEN` из настроек платформы
+- Подставляет `requirements.txt` через `pip install`
+- Монтирует `/app` из Git и `/app/data` как персистентный volume
+- Собирает образ по [`Dockerfile`](Dockerfile) (если есть) или авто-определяет Python-проект
+
+## ⚙️ Настройки Bothost
+
+| Параметр | Значение | Примечание |
+|----------|----------|------------|
+| **Тип проекта** | Docker (кастомный Dockerfile) | ✅ |
+| **BOT_TOKEN** | _(авто из платформы)_ | ✅ Bothost подставляет сам |
+| **ADMIN_IDS** | `123456789,987654321` | ID администраторов через запятую |
+| **VK_USER_TOKEN** | `ваш_токен` | Для stories.get / wall.get |
+| **VK_SERVICE_TOKEN** | `ваш_токен` | Для публичных страниц |
+| **IG_USERNAME** | `ваш_логин` | Instagram логин |
+| **IG_PASSWORD** | `ваш_пароль` | Instagram пароль |
+| **TT_MS_TOKEN** | `ваш_токен` | TikTok ms_token |
+| **ENCRYPTION_KEY** | `сгенерированный_ключ` | `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| **DB_PATH** | `sqlite+aiosqlite:////app/data/bot.db` | Не менять |
+| **TEMP_MEDIA_DIR** | `/app/data/tmp` | Не менять |
+| **LOG_LEVEL** | `INFO` | `DEBUG` для отладки |
 
 ## 📁 Структура проекта
 
@@ -73,10 +92,8 @@ tgbotstory2/
 │   └── middleware/          # structlog
 ├── tests/                   # 31 тест (31/31 ✅)
 ├── spec/                    # SPARC-спецификации
-├── scripts/
-│   ├── setup.sh             # скрипт развёртывания
-│   └── healthcheck.sh       # healthcheck
-├── tgbotstory2.service      # systemd unit
+├── Dockerfile               # Bothost Docker-образ
+├── pyproject.toml           # Python-метаданные
 ├── requirements.txt
 ├── .env.example
 └── README.md
