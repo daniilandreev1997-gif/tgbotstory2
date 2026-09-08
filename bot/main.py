@@ -11,7 +11,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.config import load_settings
-from bot.db.session import create_engine, create_session_factory, init_db
+from bot.db.session import create_engine, create_session_factory, init_db, set_session_factory
 from bot.handlers import (
     add_target_router,
     auth_router,
@@ -48,6 +48,7 @@ async def main() -> None:
     engine = create_engine(settings.db_path)
     await init_db(engine)
     session_factory = create_session_factory(engine)
+    set_session_factory(session_factory)
 
     # Initialize bot and dispatcher
     bot = Bot(token=settings.bot_token)

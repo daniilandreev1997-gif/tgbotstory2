@@ -10,6 +10,9 @@ from aiogram.types import (
     Message,
 )
 
+from bot.db.models import Target
+from bot.db.session import get_session_factory
+
 add_target_router = Router(name="add_target")
 
 
@@ -154,10 +157,30 @@ async def content_type_selected(callback: CallbackQuery, state: FSMContext) -> N
 @add_target_router.callback_query(AddTargetStates.waiting_confirm, F.data == "add_target:confirm")
 async def confirm_add(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
+    platform = data["platform"]
+    target_type = data.get("target_type", "user")
+    username = data["username"]
+    content_type = data["content_type"]
+
+    # Persist to database
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        target = Target(
+            platform=platform,
+            target_type=target_type,
+            target_username=username,
+            target_id=username,
+            content_type=content_type,
+            is_active=True,
+            added_by=callback.from_user.id if callback.from_user else None,
+        )
+        session.add(target)
+        await session.commit()
+
     await callback.message.edit_text(
         f"✅ Цель добавлена!\n\n"
-        f"**{data['username']}** — {PLATFORM_LABELS.get(data['platform'], data['platform'])} "
-        f"({CONTENT_LABELS.get(data['content_type'], data['content_type'])})",
+        f"**{username}** — {PLATFORM_LABELS.get(platform, platform)} "
+        f"({CONTENT_LABELS.get(content_type, content_type)})",
     )
     await state.clear()
     await callback.answer("✅ Добавлено!")

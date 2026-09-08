@@ -10,6 +10,11 @@ from aiogram.types import (
     Message,
 )
 
+from bot.config import load_settings
+from bot.crypto import CredentialEncryption
+from bot.db.models import AuthCredential
+from bot.db.session import get_session_factory
+
 auth_router = Router(name="auth")
 
 
@@ -185,9 +190,41 @@ async def _show_confirm(source, state: FSMContext) -> None:
 @auth_router.callback_query(AuthStates.waiting_confirm, F.data == "auth:confirm")
 async def confirm_auth(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
+    platform = data["platform"]
+    credential_type = data["credential_type"]
+    label = data.get("label", "")
+    settings = load_settings()
+
+    # Build credential payload dict based on type
+    if credential_type in ("token", "cookie"):
+        payload = {"token": data["credential_value"]}
+    else:
+        # session_file: store file_id + file_name
+        payload = {
+            "file_id": data.get("file_id", ""),
+            "file_name": data.get("file_name", ""),
+        }
+
+    # Encrypt credential data before storing
+    encrypted_data = CredentialEncryption.encrypt_dict(payload, settings.encryption_key)
+
+    # Persist to database
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        cred = AuthCredential(
+            platform=platform,
+            credential_type=credential_type,
+            label=label or None,
+            credential_data=encrypted_data,
+            is_valid=True,
+            added_by=callback.from_user.id if callback.from_user else None,
+        )
+        session.add(cred)
+        await session.commit()
+
     await callback.message.edit_text(
-        f"✅ Токен **{data.get('label', '—')}** сохранён!\n\n"
-        f"Платформа: {PLATFORM_LABELS.get(data.get('platform', ''), data.get('platform', '?'))}",
+        f"✅ Токен **{label or '—'}** сохранён!\n\n"
+        f"Платформа: {PLATFORM_LABELS.get(platform, platform)}",
     )
     await state.clear()
     await callback.answer("✅ Сохранено!")

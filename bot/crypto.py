@@ -14,6 +14,40 @@ class CredentialEncryption:
     """Encrypt/decrypt credential JSON blobs with Fernet."""
 
     @staticmethod
+    def encrypt_dict(data: dict, encryption_key: str) -> str:
+        """Encrypt a dict as a Fernet-encrypted JSON string.
+
+        Args:
+            data: Dictionary to encrypt (e.g. {"token": "abc123"}).
+            encryption_key: Fernet key (32-byte url-safe base64-encoded).
+
+        Returns:
+            str: Fernet token (base64-encoded encrypted bytes).
+
+        Raises:
+            ValueError: If encryption fails.
+        """
+        if not encryption_key:
+            return json.dumps(data, ensure_ascii=False)
+
+        try:
+            from cryptography.fernet import Fernet
+        except ImportError:
+            raise ImportError(
+                "cryptography package is required for credential encryption. "
+                "Install with: pip install cryptography"
+            )
+
+        try:
+            f = Fernet(encryption_key.encode("utf-8"))
+            plain_bytes = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            encrypted_bytes = f.encrypt(plain_bytes)
+            return encrypted_bytes.decode("utf-8")
+        except Exception as e:
+            logger.error("credential_encrypt_failed: error=%s", str(e))
+            raise ValueError(f"Failed to encrypt credential data: {e}") from e
+
+    @staticmethod
     def decrypt_string(encrypted_data: str, encryption_key: str) -> dict:
         """Decrypt a Fernet-encrypted JSON string and return the parsed dict.
 
@@ -50,5 +84,5 @@ class CredentialEncryption:
             decrypted_bytes = f.decrypt(encrypted_data.encode("utf-8"))
             return json.loads(decrypted_bytes.decode("utf-8"))
         except Exception as e:
-            logger.error("credential_decrypt_failed", error=str(e))
+            logger.error("credential_decrypt_failed: error=%s", str(e))
             raise ValueError(f"Failed to decrypt credential data: {e}") from e

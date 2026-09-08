@@ -61,7 +61,7 @@ class SchedulerService:
         from sqlalchemy import select
         import hashlib
 
-        logger.info("poll_started", platform=platform, content_type=content_type, target_type=target_type, job_name=job_name)
+        logger.info("poll_started: platform=%s content_type=%s target_type=%s job_name=%s", platform, content_type, target_type, job_name)
 
         async with self._session_factory() as session:
             stmt = select(Target).where(
@@ -74,7 +74,7 @@ class SchedulerService:
             targets = result.scalars().all()
 
             if not targets:
-                logger.debug("poll_no_targets", platform=platform, content_type=content_type)
+                logger.debug("poll_no_targets: platform=%s content_type=%s", platform, content_type)
                 return
 
             auth_stmt = select(AuthCredential).where(
@@ -85,7 +85,7 @@ class SchedulerService:
             credentials = auth_result.scalars().first()
 
             if not credentials:
-                logger.warning("poll_no_credentials", platform=platform)
+                logger.warning("poll_no_credentials: platform=%s", platform)
                 return
 
             extractor = self._build_extractor(platform, credentials)
@@ -94,7 +94,7 @@ class SchedulerService:
             for target in targets:
                 await session.refresh(target, attribute_names=["is_active"])
                 if not target.is_active:
-                    logger.debug("poll_target_inactive", target_id=target.id)
+                    logger.debug("poll_target_inactive: target_id=%s", target.id)
                     continue
 
                 log_entry = PollLog(target_id=target.id, platform=platform, content_type=content_type, job_name=job_name, started_at=datetime.utcnow(), status="success")
@@ -120,7 +120,7 @@ class SchedulerService:
                             msg_ids = await delivery.deliver(item)
                             ch.telegram_msg_ids = msg_ids
                         except Exception:
-                            logger.warning("delivery_failed_content_hash_saved", content_pk=item.content_pk, platform=platform)
+                            logger.warning("delivery_failed_content_hash_saved: content_pk=%s platform=%s", item.content_pk, platform)
 
                         await session.commit()
                         new_items += 1
@@ -141,7 +141,7 @@ class SchedulerService:
                     log_entry.error_message = f"Poll timeout after {self._settings.poll_timeout}s"
                     target.error_count += 1
                     target.last_error = "timeout"
-                    logger.warning("poll_timeout", target_id=target.id, platform=platform)
+                    logger.warning("poll_timeout: target_id=%s platform=%s", target.id, platform)
 
                 except AuthExpiredError as e:
                     log_entry.status = "error"
@@ -149,35 +149,35 @@ class SchedulerService:
                     target.error_count += 1
                     target.last_error = "auth_expired"
                     credentials.is_valid = False
-                    logger.error("poll_auth_expired", platform=platform, error=str(e))
+                    logger.error("poll_auth_expired: platform=%s error=%s", platform, str(e))
 
                 except RateLimitError as e:
                     log_entry.status = "rate_limited"
                     log_entry.error_message = str(e)
                     target.error_count += 1
                     target.last_error = "rate_limited"
-                    logger.warning("poll_rate_limited", platform=platform, retry_after=e.retry_after_sec)
+                    logger.warning("poll_rate_limited: platform=%s retry_after=%s", platform, e.retry_after_sec)
 
                 except NetworkError as e:
                     log_entry.status = "error"
                     log_entry.error_message = str(e)
                     target.error_count += 1
                     target.last_error = "network_error"
-                    logger.error("poll_network_error", platform=platform, error=str(e))
+                    logger.error("poll_network_error: platform=%s error=%s", platform, str(e))
 
                 except Exception as e:
                     log_entry.status = "error"
                     log_entry.error_message = str(e)
                     target.error_count += 1
                     target.last_error = type(e).__name__
-                    logger.error("poll_unexpected_error", platform=platform, error=str(e))
+                    logger.error("poll_unexpected_error: platform=%s error=%s", platform, str(e))
 
                 finally:
                     log_entry.finished_at = datetime.utcnow()
                     session.add(log_entry)
                     await session.commit()
 
-        logger.info("poll_finished", platform=platform, content_type=content_type, target_type=target_type, job_name=job_name)
+        logger.info("poll_finished: platform=%s content_type=%s target_type=%s job_name=%s", platform, content_type, target_type, job_name)
 
     def _build_extractor(self, platform, credentials):
         from bot.extractors import VkExtractor, IgExtractor, TtExtractor
@@ -205,4 +205,4 @@ class SchedulerService:
             stmt = delete(ContentHash).where(ContentHash.delivered_at < cutoff)
             result = await session.execute(stmt)
             await session.commit()
-            logger.info("cleanup_old_hashes", deleted_count=result.rowcount)
+            logger.info("cleanup_old_hashes: deleted_count=%s", result.rowcount)

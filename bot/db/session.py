@@ -4,6 +4,7 @@ Uses SQLite + aiosqlite with WAL mode and foreign keys ON.
 """
 
 from collections.abc import AsyncGenerator
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -14,6 +15,31 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from bot.db.models import Base
+
+# ---------------------------------------------------------------------------
+# Global session factory reference — set once at startup by bot/main.py
+# Handlers import get_session_factory() to create ad-hoc sessions.
+# ---------------------------------------------------------------------------
+_session_factory: Optional[async_sessionmaker[AsyncSession]] = None
+
+
+def set_session_factory(factory: async_sessionmaker[AsyncSession]) -> None:
+    """Store the session factory globally so handlers can use it."""
+    global _session_factory
+    _session_factory = factory
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the global session factory.
+
+    Raises:
+        RuntimeError: If set_session_factory() was not called yet.
+    """
+    if _session_factory is None:
+        raise RuntimeError(
+            "session_factory is not set. Call set_session_factory() at startup."
+        )
+    return _session_factory
 
 
 def create_engine(db_path: str) -> AsyncEngine:
