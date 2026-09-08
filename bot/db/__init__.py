@@ -1,21 +1,35 @@
-"""Database layer - SQLAlchemy async engine, session, and ORM models."""
+"""Database package — v3.0."""
 
-from bot.db.models import Base, Target, ContentHash, AuthCredential, PollLog
-from bot.db.session import (
-    create_engine,
-    create_session_factory,
-    get_session,
+from bot.db.models import (
     init_db,
+    add_target,
+    remove_target,
+    get_targets,
+    count_targets,
+    get_all_chat_ids,
+    is_item_sent,
+    mark_item_sent,
+    get_tt_post_index,
+    update_tt_post_index,
+    is_in_cooldown,
+    get_error_count,
+    set_error_cooldown,
+    clear_error_cooldown,
 )
 
 __all__ = [
-    "Base",
-    "Target",
-    "ContentHash",
-    "AuthCredential",
-    "PollLog",
-    "create_engine",
-    "create_session_factory",
-    "get_session",
     "init_db",
+    "add_target",
+    "remove_target",
+    "get_targets",
+    "count_targets",
+    "get_all_chat_ids",
+    "is_item_sent",
+    "mark_item_sent",
+    "get_tt_post_index",
+    "update_tt_post_index",
+    "is_in_cooldown",
+    "get_error_count",
+    "set_error_cooldown",
+    "clear_error_cooldown",
 ]

@@ -1,73 +1,92 @@
-"""Configuration via pydantic-settings.
+"""Load configuration from D:/AI/secrets/ — never hardcode tokens."""
 
-All settings are loaded from environment variables or .env file.
-No hardcoded values. Secrets are in D:/AI/secrets/.env
-"""
+from __future__ import annotations
 
-from functools import lru_cache
+import os
+from pathlib import Path
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import structlog
 
+logger = structlog.get_logger(__name__)
 
-class Settings(BaseSettings):
-    """Application settings loaded from .env / environment."""
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    # --- Telegram ---
-    bot_token: str = ""
-    admin_ids: str = ""
-    chat_id: int = 0
-
-    # --- VK ---
-    vk_user_token: str | None = None
-    vk_service_token: str | None = None
-
-    # --- Instagram ---
-    ig_username: str | None = None
-    ig_password: str | None = None
-
-    # --- TikTok ---
-    tt_ms_token: str | None = None
-
-    # --- Database ---
-    db_path: str = "sqlite+aiosqlite:////app/data/bot.db"
-
-    # --- Polling ---
-    poll_timeout: int = 30
-    max_concurrent_polls: int = 3
-
-    # --- Media ---
-    temp_media_dir: str = "/app/data/tmp"
-    max_media_size_mb: int = 50
-
-    # --- Encryption ---
-    encryption_key: str = ""
-
-    # --- Logging ---
-    log_level: str = "INFO"
-    log_file: str = ""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Parse admin_ids from comma-separated string to list[int]
-        if isinstance(self.admin_ids, str):
-            raw = self.admin_ids.strip()
-            if raw:
-                object.__setattr__(
-                    self,
-                    "admin_ids",
-                    [int(x.strip()) for x in raw.split(",") if x.strip()],
-                )
-            else:
-                object.__setattr__(self, "admin_ids", [])
+# Default base path for secrets
+_SECRETS_BASE = Path(os.environ.get("SECRETS_DIR", "D:/AI/secrets"))
 
 
-@lru_cache
-def load_settings() -> Settings:
-    """Return cached Settings singleton. Reads .env once."""
-    return Settings()
+def _read_file(path: Path) -> str:
+    """Read a secret file and return stripped content."""
+    if not path.exists():
+        raise FileNotFoundError(f"Secret file not found: {path}")
+    content = path.read_text(encoding="utf-8").strip()
+    if not content:
+        raise ValueError(f"Secret file is empty: {path}")
+    return content
+
+
+# ---------------------------------------------------------------------------
+# Token paths (can be overridden via environment variables)
+# ---------------------------------------------------------------------------
+_VK_TOKEN_PATH = Path(os.environ.get("VK_TOKEN_PATH", _SECRETS_BASE / "vk-user-token-new-1.txt"))
+_TG_TOKEN_PATH = Path(os.environ.get("TG_TOKEN_PATH", _SECRETS_BASE / "botfathertg.txt"))
+
+
+def load_vk_token() -> str:
+    """Return the VK access token."""
+    # Bothost/Docker: read from env var
+    token = os.environ.get("VK_TOKEN")
+    if token:
+        return token.strip()
+    # Local dev: read from D:/AI/secrets/
+    token = _read_file(_VK_TOKEN_PATH)
+    logger.debug("vk_token_loaded", path=str(_VK_TOKEN_PATH))
+    return token
+
+
+def load_tg_token() -> str:
+    """Return the Telegram bot token."""
+    # Bothost/Docker: read from env var
+    token = os.environ.get("BOT_TOKEN")
+    if token:
+        return token.strip()
+    # Local dev: read from D:/AI/secrets/
+    token = _read_file(_TG_TOKEN_PATH)
+    logger.debug("tg_token_loaded", path=str(_TG_TOKEN_PATH))
+    return token
+
+
+# ---------------------------------------------------------------------------
+# API Constants
+# ---------------------------------------------------------------------------
+VK_API_VERSION = "5.199"
+VK_STORIES_URL = "https://api.vk.com/method/stories.get"
+VK_USERS_URL = "https://api.vk.com/method/users.get"
+
+# ---------------------------------------------------------------------------
+# Scheduler intervals (seconds)
+# ---------------------------------------------------------------------------
+VK_POLL_INTERVAL = 5 * 60       # 5 minutes
+IG_POLL_INTERVAL = 5 * 60       # 5 minutes
+TT_STORIES_INTERVAL = 5 * 60    # 5 minutes
+TT_POSTS_INTERVAL = 10 * 60     # 10 minutes
+
+# ---------------------------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------------------------
+ERROR_COOLDOWN_MINUTES = 30
+TT_POSTS_SCAN_LIMIT = 20
+
+# Chrome binary path (for Selenium IG/TT clients).
+# On bothost/Docker, set via env: CHROME_BINARY=/usr/bin/google-chrome
+CHROME_BINARY = os.environ.get("CHROME_BINARY", "")
+
+# ---------------------------------------------------------------------------
+# Timezone
+# ---------------------------------------------------------------------------
+TZ_OFFSET_HOURS: int = 4
+TZ_LABEL: str = "GMT+4.0"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+DB_PATH: Path = Path(os.environ.get("DB_PATH", "bot.db"))
+LOG_DIR: Path = Path(os.environ.get("LOG_DIR", "logs"))

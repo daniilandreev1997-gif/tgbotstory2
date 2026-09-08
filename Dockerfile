@@ -1,25 +1,29 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
+
+# Install Chrome for Selenium (IG/TT clients)
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update && apt-get install -y \
+    google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# System dependencies for playwright + ffmpeg
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-    libdbus-1-3 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-    libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
-    && rm -rf /var/lib/apt/lists/*
-
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install playwright browsers (for TikTok)
-RUN playwright install chromium && playwright install-deps chromium
-
+# Copy source code
 COPY . .
 
-# Bothost sets BOT_TOKEN automatically
-# Data directory must be /app/data for persistence
-RUN mkdir -p /app/data /app/data/tmp && chmod 777 /app/data /app/data/tmp
+# Chrome binary for Selenium
+ENV CHROME_BINARY=/usr/bin/google-chrome
+# Avoid .pyc files
+ENV PYTHONDONTWRITEBYTECODE=1
+# Flush output immediately
+ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "-m", "bot.main"]
+CMD ["python", "main.py"]

@@ -1,5 +1,5 @@
-"""Transport layer - media delivery."""
+"""Transport package."""
 
-from bot.transport.delivery import MediaDelivery
+from bot.transport.delivery import send_photo, send_video
 
-__all__ = ["MediaDelivery"]
+__all__ = ["send_photo", "send_video"]
