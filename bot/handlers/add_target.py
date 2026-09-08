@@ -290,24 +290,8 @@ async def confirm_add(callback: CallbackQuery, state: FSMContext) -> None:
 
     session_factory = get_session_factory()
     async with session_factory() as session:
-        # Check for duplicate before inserting
-        stmt = select(Target).where(
-            Target.platform == platform,
-            Target.target_id == username,
-            Target.content_type == content_type,
-        )
-        result = await session.execute(stmt)
-        existing = result.scalar_one_or_none()
-
-        if existing is not None:
-            await callback.message.edit_text(
-                "⚠️ Эта цель уже отслеживается.",
-            )
-            await state.clear()
-            await callback.answer("⚠️ Уже существует")
-            return
-
-        # Persist to database
+        # Persist to database — rely on UNIQUE constraint for atomicity.
+        # A prior SELECT + INSERT is not atomic and can race with concurrent requests.
         target = Target(
             platform=platform,
             target_type=target_type,
