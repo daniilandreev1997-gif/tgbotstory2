@@ -85,10 +85,17 @@ class SchedulerService:
             credentials = auth_result.scalars().first()
 
             if not credentials:
-                logger.warning("poll_no_credentials: platform=%s", platform)
-                return
+                if platform == "vk" and self._settings.vk_user_token:
+                    logger.info("poll_no_db_credentials_using_env_token: platform=%s", platform)
+                else:
+                    logger.warning("poll_no_credentials: platform=%s", platform)
+                    return
 
             extractor = await self._build_extractor(platform, credentials)
+            if extractor is None:
+                logger.warning("poll_skipped_no_extractor: platform=%s", platform)
+                return
+
             delivery = MediaDelivery(bot=self._bot, chat_id=self._chat_id, temp_dir=self._settings.temp_media_dir, max_size_mb=self._settings.max_media_size_mb)
 
             for target in targets:
@@ -150,6 +157,16 @@ class SchedulerService:
                     target.last_error = "auth_expired"
                     credentials.is_valid = False
                     logger.error("poll_auth_expired: platform=%s error=%s", platform, str(e))
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._chat_id,
+                            text=(
+                                f"⚠️ Токен {platform.upper()} истёк или недействителен.\n"
+                                "Отправьте новый через /auth или укажите VK_USER_TOKEN в переменных окружения."
+                            ),
+                        )
+                    except Exception:
+                        logger.warning("auth_expired_cant_notify: platform=%s", platform)
 
                 except RateLimitError as e:
                     log_entry.status = "rate_limited"
@@ -183,13 +200,49 @@ class SchedulerService:
         from bot.extractors import VkExtractor, IgExtractor, TtExtractor
         from bot.crypto import CredentialEncryption
 
-        cred_dict = CredentialEncryption.decrypt_string(credentials.credential_data, self._settings.encryption_key)
+        if credentials is not None:
+            cred_dict = CredentialEncryption.decrypt_string(credentials.credential_data, self._settings.encryption_key)
+        else:
+            cred_dict = {}
 
         if platform == "vk":
             from vkbottle import API
+
+            # Priority 1: VK_USER_TOKEN from environment
+            token: str | None = self._settings.vk_user_token
+            if token:
+                logger.info("vk_using_env_user_token")
+            else:
+                # Priority 2: user_token from DB credential_data
+                token = cred_dict.get("user_token", "")
+                if token:
+                    logger.info("vk_using_db_user_token")
+                else:
+                    # Priority 3: service_token from DB (backward compat — plain "token" key)
+                    token = cred_dict.get("token", "")
+                    if token:
+                        logger.info("vk_using_db_service_token")
+
+            if not token:
+                # Priority 4: no token at all — notify user in Telegram
+                logger.warning("vk_no_token_available")
+                try:
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        text=(
+                            "⚠️ Для мониторинга VK нужен пользовательский токен (user_token).\n"
+                            "Сервисный ключ не позволяет получать stories.\n\n"
+                            "Отправьте токен через /auth или укажите VK_USER_TOKEN в переменных окружения."
+                        ),
+                    )
+                except Exception:
+                    logger.warning("vk_no_token_cant_notify")
+                return None
+
             extractor = VkExtractor(credentials=cred_dict)
-            extractor._api = API(token=cred_dict.get("user_token", ""))
+            extractor._api = API(token=token)
             return extractor
+
         elif platform == "instagram":
             from instagrapi import Client
             extractor = IgExtractor(credentials=cred_dict)

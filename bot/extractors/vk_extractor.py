@@ -42,15 +42,17 @@ class VkExtractor(BaseExtractor):
         except Exception as e:
             return self._handle_api_error(e, "vk")
 
-        items = response.get("items", [])
+        # VK API stories.get with extended=1 returns a **grouped** response:
+        #   response.items[]  — each element is a story group (one per user)
+        #   group.stories[]   — actual story objects inside the group
         result = []
+        for group in response.get("items", []):
+            for story in group.get("stories", []):
+                story_pk = story.get("id")
+                if last_poll_pk is not None and str(story_pk) <= str(last_poll_pk):
+                    continue
 
-        for story in items:
-            story_pk = story.get("id")
-            if last_poll_pk is not None and str(story_pk) <= str(last_poll_pk):
-                continue
-
-            result.append(self._parse_story_to_media_item(story, target_id))
+                result.append(self._parse_story_to_media_item(story, target_id))
 
         return result
 
@@ -91,13 +93,42 @@ class VkExtractor(BaseExtractor):
         is_video = story.get("type") == "video"
 
         if is_video and "video" in story:
-            media_urls.append(story["video"].get("url", ""))
+            video = story["video"]
+            # vkbottle may provide video.url directly; fallback to sizes extraction
+            if video.get("url"):
+                media_urls.append(video["url"])
+            elif video.get("files"):
+                # Some VK video responses nest URLs under 'files'
+                files = video["files"]
+                if isinstance(files, dict):
+                    best = files.get("mp4_1080") or files.get("mp4_720") or files.get("mp4_480") or files.get("mp4_360")
+                    if best:
+                        media_urls.append(best)
         elif "photo" in story:
-            media_urls.append(story["photo"].get("url", ""))
+            photo = story["photo"]
+            # vkbottle returns photo.sizes[] (list of {url, width, height, type})
+            sizes = photo.get("sizes", [])
+            if sizes:
+                # Last size is the largest (w > z > y > x)
+                media_urls.append(sizes[-1].get("url", ""))
+            elif photo.get("url"):
+                # Fallback: raw dict may have url directly
+                media_urls.append(photo["url"])
 
         timestamp = None
         if "date" in story:
-            timestamp = datetime.fromtimestamp(story["date"])
+            raw_date = story["date"]
+            if isinstance(raw_date, (int, float)):
+                timestamp = datetime.fromtimestamp(raw_date)
+            elif isinstance(raw_date, str):
+                # vkbottle returns ISO-format datetime strings
+                timestamp = datetime.fromisoformat(raw_date)
+            elif isinstance(raw_date, datetime):
+                timestamp = raw_date
+
+        duration_sec = None
+        if is_video and "video" in story:
+            duration_sec = story["video"].get("duration")
 
         return MediaItem(
             platform="vk",
@@ -108,7 +139,7 @@ class VkExtractor(BaseExtractor):
             caption=None,
             timestamp=timestamp,
             is_video=is_video,
-            duration_sec=story.get("video", {}).get("duration") if is_video else None,
+            duration_sec=duration_sec,
             metadata={"type": story.get("type")},
         )
 

@@ -195,9 +195,13 @@ async def confirm_auth(callback: CallbackQuery, state: FSMContext) -> None:
     label = data.get("label", "")
     settings = load_settings()
 
-    # Build credential payload dict based on type
+    # Build credential payload dict based on type and platform
     if credential_type in ("token", "cookie"):
-        payload = {"token": data["credential_value"]}
+        # VK requires 'user_token' key for stories.get access
+        if platform == "vk":
+            payload = {"user_token": data["credential_value"]}
+        else:
+            payload = {"token": data["credential_value"]}
     else:
         # session_file: store file_id + file_name
         payload = {
