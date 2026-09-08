@@ -1,5 +1,10 @@
 """Add target FSM wizard."""
 
+import asyncio
+import hashlib
+import logging
+from datetime import datetime
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -13,8 +18,14 @@ from aiogram.types import (
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from bot.db.models import Target
+from bot.config import load_settings
+from bot.crypto import CredentialEncryption
+from bot.db.models import AuthCredential, ContentHash, Target
 from bot.db.session import get_session_factory
+from bot.extractors import VkExtractor
+from bot.transport.delivery import MediaDelivery
+
+logger = logging.getLogger(__name__)
 
 add_target_router = Router(name="add_target")
 
@@ -73,6 +84,118 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+async def _immediate_poll_and_deliver(
+    session,
+    target: Target,
+    callback: CallbackQuery,
+) -> int | None:
+    """Immediately poll VK for stories and deliver results.
+
+    Best-effort: failures do not affect target creation.
+
+    Returns:
+        Number of items found (>=0), None if credentials missing,
+        or -1 if an error occurred.
+    """
+    try:
+        # 1. Get VK credentials from DB
+        stmt = select(AuthCredential).where(
+            AuthCredential.platform == "vk",
+            AuthCredential.is_valid == True,
+        )
+        result = await session.execute(stmt)
+        cred_row = result.scalars().first()
+        if not cred_row:
+            return None
+
+        # 2. Load settings
+        settings = load_settings()
+
+        # 3. Build VkExtractor with VK API (same pattern as scheduler._build_extractor)
+        cred_dict = CredentialEncryption.decrypt_string(
+            cred_row.credential_data, settings.encryption_key,
+        )
+        extractor = VkExtractor(credentials=cred_dict)
+
+        from vkbottle import API
+        extractor._api = API(token=cred_dict.get("user_token", ""))
+
+        # 4. Poll for stories (first poll — get ALL active stories)
+        target_dict = {
+            "target_id": target.target_id,
+            "target_type": target.target_type,
+            "target_username": target.target_username,
+            "content_type": "stories",
+            "last_poll_pk": None,
+        }
+        items = await asyncio.wait_for(extractor.poll(target_dict), timeout=30)
+
+        # 5. Deliver each item (same pattern as scheduler._poll_platform)
+        delivery = MediaDelivery(
+            bot=callback.bot,
+            chat_id=callback.message.chat.id,
+            temp_dir=settings.temp_media_dir,
+            max_size_mb=settings.max_media_size_mb,
+        )
+
+        new_items = 0
+        for item in items:
+            content_hash = hashlib.sha256(
+                f"{item.platform}:{item.content_pk}:{item.content_type}".encode("utf-8"),
+            ).hexdigest()
+
+            dup_stmt = select(ContentHash).where(
+                ContentHash.target_id == target.id,
+                ContentHash.content_hash == content_hash,
+            )
+            dup_result = await session.execute(dup_stmt)
+            if dup_result.scalars().first():
+                continue
+
+            ch = ContentHash(
+                target_id=target.id,
+                platform=item.platform,
+                content_pk=str(item.content_pk),
+                content_type=item.content_type,
+                content_hash=content_hash,
+                media_urls={"urls": item.media_urls},
+                content_meta=item.metadata,
+                telegram_msg_ids=[],
+            )
+            session.add(ch)
+            await session.flush()
+
+            try:
+                msg_ids = await delivery.deliver(item)
+                ch.telegram_msg_ids = msg_ids
+            except Exception:
+                logger.warning(
+                    "immediate_delivery_failed: content_pk=%s platform=%s",
+                    item.content_pk,
+                    "vk",
+                )
+
+            await session.commit()
+            new_items += 1
+
+        # 6. Update target polling state
+        if items:
+            target.last_poll_pk = str(items[-1].content_pk)
+        target.last_polled_at = datetime.utcnow()
+        target.error_count = 0
+        target.last_error = None
+        await session.commit()
+
+        return len(items)
+
+    except asyncio.TimeoutError:
+        logger.warning("immediate_poll_timeout: target_id=%s", target.target_id)
+        return -1
+    except Exception:
+        logger.exception("immediate_poll_failed: target_id=%s", target.target_id)
+        return -1
 
 
 @add_target_router.callback_query(lambda c: c.data == "add_target:start")
@@ -206,10 +329,48 @@ async def confirm_add(callback: CallbackQuery, state: FSMContext) -> None:
             await callback.answer("⚠️ Уже существует")
             return
 
-    await callback.message.edit_text(
-        f"✅ Цель добавлена!\n\n"
-        f"**{username}** — {PLATFORM_LABELS.get(platform, platform)} "
-        f"({CONTENT_LABELS.get(content_type, content_type)})",
-    )
+        # If VK stories — immediately poll and deliver current stories
+        items_count = -1
+        if platform == "vk" and content_type == "stories":
+            items_count = await _immediate_poll_and_deliver(
+                session=session,
+                target=target,
+                callback=callback,
+            )
+
+    # Build success message based on immediate poll result
+    if platform == "vk" and content_type == "stories":
+        if items_count is None:
+            await callback.message.edit_text(
+                f"✅ Цель добавлена!\n\n"
+                f"**{username}** — {PLATFORM_LABELS.get(platform, platform)} "
+                f"({CONTENT_LABELS.get(content_type, content_type)})\n\n"
+                f"_(Авторизация VK не настроена — stories будут проверены по расписанию.)_",
+            )
+        elif items_count > 0:
+            await callback.message.edit_text(
+                f"✅ Цель добавлена! Найдено {items_count} активных stories.\n\n"
+                f"**{username}** — {PLATFORM_LABELS.get(platform, platform)} "
+                f"({CONTENT_LABELS.get(content_type, content_type)})",
+            )
+        elif items_count == 0:
+            await callback.message.edit_text(
+                f"✅ Цель добавлена! Активных stories не найдено.\n\n"
+                f"**{username}** — {PLATFORM_LABELS.get(platform, platform)} "
+                f"({CONTENT_LABELS.get(content_type, content_type)})",
+            )
+        else:
+            await callback.message.edit_text(
+                f"✅ Цель добавлена!\n\n"
+                f"**{username}** — {PLATFORM_LABELS.get(platform, platform)} "
+                f"({CONTENT_LABELS.get(content_type, content_type)})\n\n"
+                f"_(Не удалось проверить stories — будут проверены по расписанию.)_",
+            )
+    else:
+        await callback.message.edit_text(
+            f"✅ Цель добавлена!\n\n"
+            f"**{username}** — {PLATFORM_LABELS.get(platform, platform)} "
+            f"({CONTENT_LABELS.get(content_type, content_type)})",
+        )
     await state.clear()
     await callback.answer("✅ Добавлено!")
