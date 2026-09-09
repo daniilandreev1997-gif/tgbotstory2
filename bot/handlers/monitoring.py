@@ -257,7 +257,7 @@ def build_monitoring_conv_handler() -> ConversationHandler:
         fallbacks=[
             CallbackQueryHandler(cancel_add, pattern="^(main_menu|monitoring|platform_)"),
         ],
-        per_message=False,
+        per_message=True,
         per_chat=True,
     )
 
