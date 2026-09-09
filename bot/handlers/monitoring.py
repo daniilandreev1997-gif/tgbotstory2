@@ -88,6 +88,24 @@ async def _receive_vk_target(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
 
+    # P3: Clean input — support id75327684, vk.com/id123, etc.
+    # 1. Extract numeric ID from vk.com/idXXXX URL
+    url_match = re.match(r"(?:https?://)?(?:m\.)?vk\.(?:com|ru)/id(\d+)", text)
+    if url_match:
+        text = url_match.group(1)
+    elif re.match(r"(?:https?://)?(?:m\.)?vk\.(?:com|ru)/", text):
+        # vk.com URL but not a numeric ID (screenname) — can't use
+        await update.message.reply_text("❌ ID должен быть числом. Попробуйте ещё раз:")
+        return WAITING_VK_TARGET
+    else:
+        # 2. Remove id/ID prefix (lstrip removes all 'i'/'d' chars from left)
+        text = text.strip().lstrip("id").lstrip("ID")
+
+    # 3. Validate it's a number
+    if not text:
+        await update.message.reply_text("❌ ID должен быть числом. Попробуйте ещё раз:")
+        return WAITING_VK_TARGET
+
     try:
         target_id = int(text)
     except ValueError:
@@ -95,13 +113,29 @@ async def _receive_vk_target(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return WAITING_VK_TARGET
 
     vk_token = load_vk_token()
-    display_name = await _resolve_vk_name(vk_token, target_id)
+    display_name, error_type, error_code = await _resolve_vk_name(vk_token, target_id)
+
+    # P1: Distinguish error types with specific messages
+    if error_type == "network":
+        await update.message.reply_text(
+            "❌ Не удалось подключиться к VK API. Попробуйте позже.",
+            reply_markup=_back_button("platform_vk"),
+        )
+        return WAITING_VK_TARGET
+
+    if error_type == "api_error":
+        await update.message.reply_text(
+            f"❌ Ошибка VK API (код {error_code}). Попробуйте позже.",
+            reply_markup=_back_button("platform_vk"),
+        )
+        return WAITING_VK_TARGET
+
     if display_name is None:
         await update.message.reply_text(
             "❌ Не удалось найти пользователя VK с таким ID.",
             reply_markup=_back_button("platform_vk"),
         )
-        return ConversationHandler.END
+        return WAITING_VK_TARGET  # P2: allow retry instead of END
 
     added = await add_target(chat_id, "vk", str(target_id), display_name)
     if not added:
@@ -109,7 +143,7 @@ async def _receive_vk_target(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"⚠️ {display_name} ({target_id}) уже в мониторинге.",
             reply_markup=_back_button("platform_vk"),
         )
-        return ConversationHandler.END
+        return ConversationHandler.END  # P2: END only for "already in monitoring"
 
     await ensure_scheduler(chat_id)
 
@@ -238,8 +272,14 @@ def _back_button(callback_data: str) -> InlineKeyboardMarkup:
     ])
 
 
-async def _resolve_vk_name(access_token: str, user_id: int) -> str | None:
-    """Resolve VK user ID to display name via users.get."""
+async def _resolve_vk_name(access_token: str, user_id: int) -> tuple[str | None, str | None, str | None]:
+    """Resolve VK user ID to display name via users.get.
+
+    Returns (name, error_type, error_code):
+    - name: display name if found, None otherwise
+    - error_type: "network" | "api_error" | "not_found" | None
+    - error_code: VK error code string if api_error, None otherwise
+    """
     import aiohttp
 
     from bot.vk_client import _SSL_CONTEXT
@@ -249,23 +289,44 @@ async def _resolve_vk_name(access_token: str, user_id: int) -> str | None:
         "access_token": access_token,
         "v": VK_API_VERSION,
     }
-    try:
-        # Check if proxy is available for VK API (may need it for Russia)
-        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-        connector_kwargs = {"ssl": _SSL_CONTEXT}
-        if proxy_url:
-            connector_kwargs["proxy"] = proxy_url
-        connector = aiohttp.TCPConnector(**connector_kwargs)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.get(VK_USERS_URL, params=params, timeout=10) as resp:
-                data = await resp.json()
-        if "error" in data:
-            return None
-        users = data.get("response", [])
-        if users:
-            user = users[0]
-            name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-            return name if name else None
-    except Exception as exc:
-        logger.warning("resolve_vk_name_failed", user_id=user_id, error=str(exc))
-    return None
+
+    # Try direct connection first, then fall back to proxy
+    proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
+
+    for attempt, (use_proxy, proxy) in enumerate(((False, None), (True, proxy_url)), 1):
+        # P0: Skip proxy attempt if no proxy configured
+        if use_proxy and not proxy:
+            continue
+
+        try:
+            proxy_connector = aiohttp.TCPConnector(
+                ssl=_SSL_CONTEXT,
+                proxy=proxy if use_proxy and proxy else None,
+            )
+            async with aiohttp.ClientSession(connector=proxy_connector) as session:
+                async with session.get(VK_USERS_URL, params=params, timeout=10) as resp:
+                    data = await resp.json()
+            logger.debug("vk_users_get_response", user_id=user_id,
+                          attempt=attempt, has_error="error" in data,
+                          response_keys=list(data.keys()))
+            if "error" in data:
+                err = data["error"]
+                error_code = err.get("error_code", "?")
+                logger.error("vk_users_get_error", user_id=user_id,
+                              error_code=error_code,
+                              error_msg=err.get("error_msg"))
+                return (None, "api_error", str(error_code))
+            users = data.get("response", [])
+            if users:
+                user = users[0]
+                name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+                return (name if name else None, None, None)
+            return (None, "not_found", None)
+        except Exception as exc:
+            logger.error("resolve_vk_name_failed", user_id=user_id,
+                            attempt=attempt, error=str(exc))
+            if attempt == 1:
+                continue  # try next attempt (with/without proxy)
+
+    # All attempts exhausted — network error
+    return (None, "network", None)
