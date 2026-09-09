@@ -278,8 +278,12 @@ async def _handle_error(
 
 
 def _is_chrome_not_found(exc: Exception) -> bool:
-    """Return True if the exception is caused by missing Chrome binary."""
-    return "cannot find Chrome binary" in str(exc)
+    """Return True if the exception is caused by missing browser binary (Selenium).
+
+    In the HTTP-only version this always returns False since no browser is used.
+    """
+    msg = str(exc).lower()
+    return ("cannot find" in msg and "binary" in msg) or "cannot find chrome" in msg
 
 
 def _error_message(platform: str, exc: Exception) -> str:

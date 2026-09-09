@@ -75,9 +75,18 @@ TT_POSTS_INTERVAL = 10 * 60     # 10 minutes
 ERROR_COOLDOWN_MINUTES = 30
 TT_POSTS_SCAN_LIMIT = 20
 
-# Chrome binary path (for Selenium IG/TT clients).
-# On bothost/Docker, set via env: CHROME_BINARY=/usr/bin/google-chrome
-CHROME_BINARY = os.environ.get("CHROME_BINARY", "")
+# Browser binary for Selenium IG/TT clients.
+# Windows: C:\Program Files\Microsoft\Edge\Application\msedge.exe
+# Bothost/Docker: /usr/bin/google-chrome (set via env)
+_BROWSER_DEFAULT = ""
+if os.name == "nt":
+    _BROWSER_DEFAULT = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+BROWSER_BINARY = os.environ.get("BROWSER_BINARY", _BROWSER_DEFAULT)
+USE_EDGE = os.environ.get("USE_CHROME", "0") != "1"  # default = Edge on Windows
+
+# Headless mode — "0"=visible browser (default, bypasses anti-bot),
+# "1"=headless (Docker/Bothost without display).
+HEADLESS = os.environ.get("HEADLESS", "0") == "1"
 
 # ---------------------------------------------------------------------------
 # Timezone

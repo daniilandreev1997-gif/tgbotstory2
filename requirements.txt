@@ -3,5 +3,4 @@ apscheduler>=3.10
 aiosqlite>=0.19
 aiohttp>=3.9
 structlog>=24.0
-selenium>=4.15
-webdriver-manager>=4.0
+instagrapi>=2.0
